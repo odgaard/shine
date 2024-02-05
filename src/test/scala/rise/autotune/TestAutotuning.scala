@@ -109,6 +109,6 @@ class TestAutotuning extends test_util.Tests {
     val bestSample = autotune.getBest(tuningResult.samples)
     println("bestSample: \n" + bestSample)
 
-    autotune.saveSamples("autotuning/RISE.csv", tuningResult)
+    //autotune.saveSamples("autotuning/RISE.csv", tuningResult)
   }
 }

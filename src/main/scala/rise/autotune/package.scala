@@ -137,8 +137,8 @@ package object autotune {
 
   object ServerControl {
     // Promise to control server lifecycle
-    val stopPromise: Promise[Unit] = Promise[Unit]()
-    val stopFuture: Future[Unit] = stopPromise.future
+    var stopPromise: Promise[Unit] = _
+    var stopFuture: Future[Unit] = _
   }
 
 
@@ -381,6 +381,10 @@ package object autotune {
     TunerControl.tuner = tuner
     TunerControl.start = System.currentTimeMillis()
     TunerControl.e = e
+
+    ServerControl.stopPromise = Promise[Unit]()
+    ServerControl.stopFuture = ServerControl.stopPromise.future
+
     val parameters = collectParameters(e)
 
     // inject input sizes into constraints
@@ -390,12 +394,6 @@ package object autotune {
       .map(constraint => constraint.substitute(inputMap.asInstanceOf[Map[ArithExpr, ArithExpr]]))
     
     TunerControl.constraints = constraints
-
-    if (tuner.saveToFile) {
-      ("mkdir -p " + tuner.output !!)
-      //      ("mkdir -p " + tuner.output + "/" + tuner.name + "_hm" !!)
-      //      ("mkdir -p " + tuner.output + "/" + "log" !!)
-    }
 
     // generate json if necessary
     tuner.configFile match {
@@ -455,12 +453,26 @@ package object autotune {
     val bindingFuture = Http().newServerAt("localhost", 50051).bind(handler)
     println("Server started at localhost:50051")
 
+    // Method to stop the server
+    def stopServer(bindingFuture: Future[Http.ServerBinding]): Unit = {
+      bindingFuture
+        .flatMap(_.unbind()) // Trigger unbinding from the port
+        .onComplete { _ =>
+          println("Server stopped")
+          system.terminate() // Shutdown the ActorSystem
+        }
+    }
+
+    // Example of stopping the server after some condition is met
+    ServerControl.stopFuture.onComplete { _ =>
+      stopServer(bindingFuture)
+    }
+
     // Block until the stop condition is met
     Await.result(ServerControl.stopFuture, Duration.Inf)
-    
+
     val samples = ListBuffer[Sample]()
     val tuningResult = TuningResult(samples.toSeq, tuner)
-    //saveTuningResult(tuningResult)
     tuningResult
   }
 
@@ -494,20 +506,6 @@ package object autotune {
     }
   }
 
-  // todo adjust this
-  //  def applyBest(e: Expr, samples: Seq[Sample]): Expr = {
-  //    val best = getBest(samples)
-  //    best match {
-  //      case Some(_) => rise.core.substitute.natsInExpr(best.get.parameters.toMap[Nat, Nat], e)
-  //      case None => e
-  //    }
-  //  }
-
-  // todo adjust this
-  //  def applySample(e: Expr, sample: Sample): Expr = {
-  //    rise.core.substitute.natsInExpr(sample.parameters.toMap[Nat, Nat], e)
-  //  }
-
   def getDuration(tuningResult: TuningResult): TimeSpan[Time.ms] = {
     val duration = tuningResult.samples.apply(tuningResult.samples.size).timestamp -
       tuningResult.samples.apply(0).timestamp
@@ -518,199 +516,6 @@ package object autotune {
   def getSamples(tuningResult: TuningResult): Int = {
     tuningResult.samples.size
   }
-
-  def saveTuningResult(tuningResult: TuningResult) = {
-    val tuner = tuningResult.tuner
-
-    // save results to file
-    if (tuner.saveToFile) {
-
-      // get unique filepath
-      val path = tuner.output + "/" + tuner.name + ".csv"
-      val file = new File(path)
-      val timeAppendix = if (file.exists()) {
-        "_" + System.currentTimeMillis().toString
-      } else {
-        ""
-      }
-
-      //      // save samples to file
-      //      saveSamples(
-      //        tuner.output + "/" + tuner.name + "/" + tuner.name + timeAppendix + ".csv",
-      //        tuningResult
-      //      )
-
-      // save hm output file
-      //      ("mv " + tuner.name + "_output_samples.csv" + " " +
-      //        tuner.output + "/" + tuner.name + "_hm/" + tuner.name + timeAppendix + "_hm" + ".csv" !!)
-
-      // save hm output file
-      ("mv " + tuner.name + "_output_samples.csv" + " " +
-        tuner.output + "/" + tuner.name + timeAppendix + ".csv" !!)
-
-      // save logfile and configfile
-      if (tuner.configFile.isDefined) {
-
-        // parse logfile name from json or use default name
-        val logfile = try {
-          parseFromJson(tuner.configFile.get, "log_file")
-        } catch {
-          case e: NoSuchElementException => "tuner_logfile.log"
-        }
-
-        //         move logfile to output folder
-        //        ("mv " + logfile + " " +
-        //          tuner.output + "/log/" + logfile.substring(0, logfile.length - 4) + timeAppendix + ".log" !!)
-
-        // copy config file to output folder
-        //        ("cp " + tuner.configFile.get + " " + tuner.output !!)
-      } else {
-
-        // move logfile to output folder
-        //        ("mv " + tuner.name + ".log" + " " +
-        //          tuner.output + "/log/" + tuner.name + timeAppendix + ".log" !!) // get unique filename
-
-      }
-
-      // create plots
-      //      plotTuning(tuner)
-
-    } else {
-      // remove logfile and generated config file
-      if (tuner.configFile.isDefined) {
-
-        val logfile = try {
-          parseFromJson(tuner.configFile.get, "log_file")
-        } catch {
-          case e: NoSuchElementException => "tuner_logfile.log"
-        }
-
-        ("rm " + logfile !!)
-
-      } else {
-
-        ("rm " + tuner.name + ".log" !!)
-        ("rm " + "/tmp/" + tuner.name + ".json" !!)
-
-      }
-    }
-
-    // todo save meta
-
-  }
-
-  // write tuning results into csv file
-  def saveSamples(path: String, tuningResult: TuningResult): String = {
-    // create unique filepath
-    val file = new File(path)
-    val uniqueFilepath = if (file.exists()) {
-      val timeAppendix = System.currentTimeMillis().toString
-      path.substring(0, path.length - 4) + "_" + timeAppendix + ".csv"
-    } else {
-      path
-    }
-
-    // write header
-    var header = tuningResult.samples.head.parameters.map(elem => elem._1).mkString("", ",", ",")
-
-    header += "runtime" + ","
-    header += "timestamp" + ","
-    header += "total" + ","
-    header += "code generation" + ","
-    header += "compilation" + ","
-    header += "execution" + ","
-    header += "\n"
-
-    // write content
-    var content = ""
-    tuningResult.samples.foreach(sample => {
-
-      // write parameter
-      sample.parameters.foreach(param => {
-        param._2 match {
-          case ClassicParameter(value) => content += value.toString + ","
-          case PermutationParameter(value) => content += value.mkString("\"(", ",", ")\"") + ","
-        }
-      })
-
-      // write runtime
-      sample.runtime match {
-        case Right(runtime) => content += runtime.value.toString + ","
-        case Left(error) =>
-
-          val errorMessage = error.message match {
-            case None => ""
-            case Some(value) => ": " + value
-          }
-
-          content += error.errorLevel.toString + errorMessage + ","
-
-      }
-
-      // write timestamp
-      content += sample.timestamp.toString + ","
-
-      sample.tuningTimes.total match {
-        case Some(value) => content += value.value.toString + ","
-        case None => content += "-1" + ","
-      }
-      sample.tuningTimes.codegen match {
-        case Some(value) => content += value.value.toString + ","
-        case None => content += "-1" + ","
-      }
-      sample.tuningTimes.compilation match {
-        case Some(value) => content += value.value.toString + ","
-        case None => content += "-1" + ","
-      }
-      sample.tuningTimes.execution match {
-        case Some(value) => content += value.value.toString + ","
-        case None => content += "-1" + ","
-      }
-
-      // finish line
-      content += "\n"
-    })
-
-    writeToPath(uniqueFilepath, header + content)
-
-
-    uniqueFilepath
-  }
-
-  def plotTuning(tuner: Tuner) = {
-
-    // get config file
-    val configFile: String = tuner.configFile match {
-      case Some(value) => value
-      case None => tuner.output + "/" + tuner.name + ".json"
-    }
-
-    // plot results using hypermapper
-
-
-
-    (s"${tuner.tunerPython} ${tuner.tunerRoot}/${tuner.tunerPath.split("/")(0)}/plot/plot_optimization_results.py " +
-      "-j " + configFile + " " +
-      "-i " + tuner.output + "/" + tuner.name + "_hm" + " " +
-      "-o" + tuner.output + "/" + tuner.name + ".pdf" + " " +
-      "-log --y_label \"Log Runtime(ms)\"" !!)
-  }
-
-  // todo finish implementation
-  def saveMeta(path: String, tuningResult: TuningResult, tuner: Tuner): String = {
-
-    // todo save tuner information to file
-
-    // todo collect statistics from tuningResult
-    val duration = (tuningResult.samples.apply(tuningResult.samples.size).timestamp - tuningResult.samples.apply(0).timestamp)
-    val samples = tuningResult.samples.size
-
-    // save statistics to csv file (don't overwrite -> append)
-
-    // return unique filename
-    ""
-  }
-
 
   // helper functions
   private def min(s1: Sample, s2: Sample): Sample = {
