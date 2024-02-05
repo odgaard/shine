@@ -1,5 +1,6 @@
 import java.io.{File, PrintWriter}
 import java.util.concurrent.{Executors, TimeUnit, TimeoutException}
+import scala.io.Source
 
 package object util {
 
@@ -30,7 +31,7 @@ package object util {
   }
 
   def readFile(path: String): String = {
-    val source = io.Source.fromFile(path)
+    val source = Source.fromFile(path)
     try source.getLines().mkString("\n")
     finally source.close
   }

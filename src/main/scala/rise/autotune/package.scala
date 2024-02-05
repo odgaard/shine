@@ -18,6 +18,17 @@ import scala.collection.mutable.ListBuffer
 import scala.language.postfixOps
 import scala.sys.process._
 
+import akka.actor.ActorSystem
+import akka.grpc.scaladsl.ServiceHandler
+import akka.http.scaladsl.Http
+import akka.http.scaladsl.model.{HttpRequest, HttpResponse}
+import akka.http.scaladsl.server.Route
+import scala.concurrent.{ExecutionContext, Future, Promise, Await}
+import scala.concurrent.duration.Duration
+import scala.util.{Success, Failure}
+
+import rise.config_service._ // Import gRPC and protobuf classes generated from your .proto file
+
 package object autotune {
 
   case class Tuner(hostCode: HostCode = HostCode("", "", ""), // defines necessary host-code to execute program
@@ -124,16 +135,353 @@ package object autotune {
   def tuningParam[A](name: String, r: arithexpr.arithmetic.Range, w: NatFunctionWrapper[A]): A =
     w.f(TuningParameter(name, r))
 
+  object ServerControl {
+    // Promise to control server lifecycle
+    val stopPromise: Promise[Unit] = Promise[Unit]()
+    val stopFuture: Future[Unit] = stopPromise.future
+  }
+
+
+  object TunerControl {
+    var tuner: Tuner = _
+    var start: Long = _
+    var e: Expr = _
+    var constraints: Set[rise.autotune.constraints.Constraint] = _
+  }
+
+  class ConfigurationServiceImpl(implicit ec: ExecutionContext) extends ConfigurationService {
+    // Implement the RunConfigurationsClientServer method
+    private def computeSample(header: Array[String], parametersValues: Array[String]): Sample = {
+
+      val tuner = TunerControl.tuner
+      val start = TunerControl.start
+      val e = TunerControl.e
+      val constraints = TunerControl.constraints
+      val totalStart = System.currentTimeMillis()
+
+      tuner.strategyMode match {
+        case Some(fun) =>
+          // parse elems?
+          val values = header.zip(parseParameters(parametersValues.mkString(","))).toMap
+
+          val tuningParameterValues: Map[String, TuningParameterValues] = values.map(elem => elem._2 match {
+            case x if x.contains(",") => (elem._1, PermutationParameter(elem._2.split(",").toList.map(elem => elem.toFloat.toInt)))
+            case y => (elem._1, ClassicParameter(y.toFloat.toInt))
+          })
+
+          val values2 = values.map(elem => elem._2 match {
+            case x if x.contains(",") => (elem._1, elem._2.split(",").toList.map(elem => elem.toFloat.toInt))
+            case y => (elem._1, List(y.toFloat.toInt))
+          })
+
+          val tuningParams = values2.filter(elem => elem._2.size == 1).map(elem => (elem._1, elem._2.last))
+          val permutationParams = values2.filter(elem => elem._2.size != 1)
+
+          val e2 = fun(e, tuningParams, permutationParams)
+
+
+          e2 match {
+            case Right(expression) =>
+
+              val result = tuner.executor.get(expression)
+
+              val totalTime = Some(TimeSpan.inMilliseconds(
+                (System.currentTimeMillis() - totalStart).toDouble)
+              )
+
+              result._1 match {
+                case Right(value) =>
+
+                  Sample(
+                    parameters = tuningParameterValues,
+                    runtime = Right(TimeSpan.inMilliseconds(value)),
+                    timestamp = System.currentTimeMillis() - start,
+                    tuningTimes = TuningTimes(
+                      totalTime, Some(TimeSpan.inMilliseconds(result._2.get)), Some(TimeSpan.inMilliseconds(result._3.get)), Some(TimeSpan.inMilliseconds(result._4.get)))
+                  )
+
+                case Left(error) =>
+
+                  Sample(
+                    parameters = tuningParameterValues,
+                    runtime = Left(error),
+                    timestamp = System.currentTimeMillis() - start,
+                    tuningTimes = TuningTimes(
+                      totalTime, Some(TimeSpan.inMilliseconds(result._2.get)), Some(TimeSpan.inMilliseconds(result._3.get)), Some(TimeSpan.inMilliseconds(result._4.get)))
+                  )
+              }
+            case Left(error) =>
+
+              val totalTime = Some(TimeSpan.inMilliseconds((System.currentTimeMillis() - totalStart).toDouble))
+              Sample(
+                parameters = tuningParameterValues,
+                runtime = Left(AutoTuningError(SUBSTITUTION_ERROR, Some(error))),
+                timestamp = System.currentTimeMillis() - start,
+                tuningTimes = TuningTimes(totalTime, None, None, None)
+              )
+          }
+        case None =>
+          // parse here
+
+          val parametersValuesMap: Map[NatIdentifier, Nat] = header.zip(parametersValues).map { case (h, p) =>
+            NatIdentifier(h) -> (p.toFloat.toInt: Nat)
+          }.toMap
+
+          // check if we have to check
+          val check = tuner.disableChecking match {
+            case true => true
+            case false => checkConstraints(constraints, parametersValuesMap)
+          }
+
+          if (check) {
+
+            tuner.executor match {
+              case Some(exec) =>
+                val result = exec(rise.core.substitute.natsInExpr(parametersValuesMap.toMap[Nat, Nat], e))
+
+                val totalTime = Some(TimeSpan.inMilliseconds(
+                  (System.currentTimeMillis() - totalStart).toDouble)
+                )
+
+                result._1 match {
+                  case Right(value) =>
+
+                    Sample(
+                      parameters = parametersValuesMap.map(elem => (elem._1.toString, ClassicParameter(toInt(elem._2)))),
+                      runtime = Right(TimeSpan.inMilliseconds(value)),
+                      timestamp = System.currentTimeMillis() - start,
+                      tuningTimes = TuningTimes(
+                        totalTime, Some(TimeSpan.inMilliseconds(result._2.get)), Some(TimeSpan.inMilliseconds(result._3.get)), Some(TimeSpan.inMilliseconds(result._4.get)))
+                    )
+
+                  case Left(error) =>
+
+                    Sample(
+                      parameters = parametersValuesMap.map(elem => (elem._1.toString, ClassicParameter(toInt(elem._2)))),
+                      runtime = Left(error),
+                      timestamp = System.currentTimeMillis() - start,
+                      tuningTimes = TuningTimes(
+                        totalTime, Some(TimeSpan.inMilliseconds(result._2.get)), Some(TimeSpan.inMilliseconds(result._3.get)), Some(TimeSpan.inMilliseconds(result._4.get)))
+                    )
+                }
+
+              case None =>
+
+                // execute
+                val result = execute(
+                  rise.core.substitute.natsInExpr(parametersValuesMap.toMap[Nat, Nat], e),
+                  tuner.hostCode,
+                  tuner.timeouts,
+                  tuner.executionIterations,
+                  tuner.speedupFactor,
+                  tuner.runtimeStatistic
+                )
+                val totalTime = Some(TimeSpan.inMilliseconds(
+                  (System.currentTimeMillis() - totalStart).toDouble)
+                )
+                Sample(
+                  parameters = parametersValuesMap.map(elem => (elem._1.toString, ClassicParameter(toInt(elem._2)))),
+                  runtime = result.runtime,
+                  timestamp = System.currentTimeMillis() - start,
+                  tuningTimes = TuningTimes(
+                    totalTime, result.codegenTime, result.compilationTime, result.executionTime)
+                )
+            }
+          } else {
+            val totalTime = Some(TimeSpan.inMilliseconds((System.currentTimeMillis() - totalStart).toDouble))
+            Sample(
+              parameters = parametersValuesMap.map(elem => (elem._1.toString, ClassicParameter(toInt(elem._2)))),
+              runtime = Left(AutoTuningError(CONSTRAINTS_ERROR, None)),
+              timestamp = System.currentTimeMillis() - start,
+              tuningTimes = TuningTimes(totalTime, None, None, None)
+            )
+          }
+      }
+    }
+
+    override def runConfigurationsClientServer(request: ConfigurationRequest): Future[ConfigurationResponse] = {
+      // Process the request to generate a response
+
+      val totalStart = System.currentTimeMillis()
+      val tuner = Tuner
+      val parametersValuesMap = None
+      /*
+      val conf: Option[Configuration] = request.configurations
+      conf.foreach { configuration =>
+        configuration.parameters.foreach {
+          case (key, parameter) => parameter.paramType match { // Assume `paramType` is the field holding the parameter type.
+            case IntegerParam(value, _) => println(s"$key: $value")
+            case PermutationParam(value, _) => println(s"$key: $value")
+            case StringParam(value, _) => println(s"$key: $value")
+            case OrdinalParam(value, _) => println(s"$key: $value")
+            case CategoricalParam(value, _) => println(s"$key: $value")
+            case RealParam(value, _) => println(s"$key: $value")
+            // Add default case to handle unexpected cases
+            case _ => println("Unknown parameter type for key $key")
+          }
+        }
+      }
+      */
+
+/*
+      val conf: Option[Configuration] = request.configurations
+
+      conf.foreach { configuration =>
+        configuration.parameters.foreach { case (key, parameter) =>
+          parameter.paramType match {
+            case IntegerParam(value) if value.isDefined =>
+              println(s"$key: ${value.get}")
+            case RealParam(value) if value.isDefined =>
+              println(s"$key: ${value.get}")
+            case CategoricalParam(value) if value.isDefined =>
+              println(s"$key: ${value.get}")
+            case OrdinalParam(value) if value.isDefined =>
+              println(s"$key: ${value.get}")
+            case StringParam(value) if value.isDefined =>
+              println(s"$key: ${value.get}")
+            case PermutationParam(value) if value.isDefined =>// Initialization logic
+              println(s"$key: ${value.get}")
+            case _ =>
+              println(s"$key: Unknown or empty parameter type")
+          }
+        }
+      }
+      */
+      /*
+      val conf: Option[Configuration] = request.configurations
+
+      conf.foreach { configuration =>
+        configuration.parameters.foreach { case (key, parameter) =>
+          parameter.paramType match {
+            case paramType if paramType.integerParam.isDefined =>
+              println(s"$key: ${paramType.integerParam.get}")
+            case paramType if paramType.realParam.isDefined =>
+              println(s"$key: ${paramType.realParam.get}")
+            case paramType if paramType.categoricalParam.isDefined =>
+              println(s"$key: ${paramType.categoricalParam.get}")
+            case paramType if paramType.ordinalParam.isDefined =>
+              println(s"$key: ${paramType.ordinalParam.get}")
+            case paramType if paramType.stringParam.isDefined =>
+              println(s"$key: ${paramType.stringParam.get}")
+            case paramType if paramType.permutationParam.isDefined =>
+              println(s"$key: ${paramType.permutationParam.get}")
+            case _ =>
+              println(s"$key: Unknown or empty parameter type")
+          }
+        }
+      }
+      */
+      val conf: Option[Configuration] = request.configurations
+
+      // Initialize mutable collections to accumulate keys and values
+      val headers = scala.collection.mutable.ArrayBuffer[String]()
+      val values = scala.collection.mutable.ArrayBuffer[String]()
+
+      conf.foreach { configuration =>
+        configuration.parameters.foreach { case (key, parameter) =>
+          // Assuming `value` represents the extracted value from each parameter type
+          parameter.paramType match {
+            case paramType if paramType.integerParam.isDefined =>
+              headers += key
+              values += paramType.integerParam.get.value.toString
+            case paramType if paramType.realParam.isDefined =>
+              headers += key
+              values += paramType.realParam.get.value.toString
+            case paramType if paramType.categoricalParam.isDefined =>
+              headers += key
+              values += paramType.categoricalParam.get.value.toString
+            case paramType if paramType.ordinalParam.isDefined =>
+              headers += key
+              values += paramType.ordinalParam.get.value.toString
+            case paramType if paramType.stringParam.isDefined =>
+              headers += key
+              values += paramType.stringParam.get.value
+            case paramType if paramType.permutationParam.isDefined =>
+              headers += key
+              //values += paramType.permutationParam.get.value.toString
+              values += paramType.permutationParam.get.values.mkString(", ")
+          }
+        }
+      }
+
+      // Convert the ArrayBuffer to Array if necessary
+      val headerArray: Array[String] = headers.toArray
+      val valuesArray: Array[String] = values.toArray
+
+      val sample: Sample = this.computeSample(headerArray, valuesArray)
+      println(sample)
+
+
+      // Creating comma-separated strings
+      val headerString = headerArray.mkString(",")
+      val valuesString = valuesArray.mkString(",")
+
+      // Now you have your header and values as comma-separated strings
+      println(s"Header: $headerString")
+      println(s"Values: $valuesString")
+
+/*
+
+                // execute
+                val result = execute(
+                  rise.core.substitute.natsInExpr(parametersValuesMap.toMap[Nat, Nat], e),
+                  tuner.hostCode,
+                  tuner.timeouts,
+                  tuner.executionIterations,
+                  tuner.speedupFactor,
+                  tuner.runtimeStatistic
+                )
+                val totalTime = Some(TimeSpan.inMilliseconds(
+                  (System.currentTimeMillis() - totalStart).toDouble)
+                )
+                Sample(
+                  parameters = parametersValuesMap.map(elem => (elem._1.toString, ClassicParameter(toInt(elem._2)))),
+                  runtime = result.runtime,
+                  timestamp = System.currentTimeMillis() - start,
+                  tuningTimes = TuningTimes(
+                    totalTime, result.codegenTime, result.compilationTime, result.executionTime)
+                )
+
+*/
+      val metrics: Seq[Metric] = Seq(
+        Metric(Seq(sample.runtime match {
+          case Right(timeSpan) => timeSpan.value.toDouble // Assuming TimeSpan has a `value` that can be converted to Double
+          case Left(_) => 0.0 // Or some other default/error value
+        })),
+        Metric(Seq(sample.tuningTimes.codegen.getOrElse(util.TimeSpan(0, util.Time.Millisecond)).value.toDouble)),
+        Metric(Seq(sample.tuningTimes.compilation.getOrElse(util.TimeSpan(0, util.Time.Millisecond)).value.toDouble)),
+        Metric(Seq(sample.tuningTimes.execution.getOrElse(util.TimeSpan(0, util.Time.Millisecond)).value.toDouble))
+      )
+      println(metrics)
+      val timestamps: Option[Timestamp] = Some(Timestamp(System.currentTimeMillis()))
+      val feasible: Option[Feasible] = Some(Feasible(true))
+      // Construct and return the ConfigurationResponse
+      Future.successful(ConfigurationResponse(metrics, timestamps, feasible))
+    }
+
+    // Implement the Shutdown method
+    override def shutdown(request: ShutdownRequest): Future[ShutdownResponse] = {
+      // Logic to perform shutdown, e.g., releasing resources
+      println("Shutdown requested")
+      ServerControl.stopPromise.success(())
+      Future.successful(ShutdownResponse(success = true))
+    }
+  }
+
   def search(tuner: Tuner)(e: Expr): TuningResult = {
 
-    val start = System.currentTimeMillis()
+    TunerControl.tuner = tuner
+    TunerControl.start = System.currentTimeMillis()
+    TunerControl.e = e
     val parameters = collectParameters(e)
 
     // inject input sizes into constraints
     val inputs = getInputs(e)
     val inputMap = (inputs zip tuner.inputSizes).toMap
-    val constraints = collectConstraints(e, parameters)
+    val constraints: Set[rise.autotune.constraints.Constraint] = collectConstraints(e, parameters)
       .map(constraint => constraint.substitute(inputMap.asInstanceOf[Map[ArithExpr, ArithExpr]]))
+    
+    TunerControl.constraints = constraints
 
     if (tuner.saveToFile) {
       ("mkdir -p " + tuner.output !!)
@@ -168,6 +516,10 @@ package object autotune {
     //    println("constraints: \n" + constraints)
 
     // compute function value as result for hypermapper
+    /*val computeGRPCSample: (Array[TuningParameterValues]) => Sample = (params) => {
+      ClassicParameter()
+    }*/
+    /*
     val computeSample: (Array[String], Array[String]) => Sample = (header, parametersValues) => {
 
       val totalStart = System.currentTimeMillis()
@@ -311,6 +663,7 @@ package object autotune {
           }
       }
     }
+    */
 
     val configFile = tuner.configFile match {
       case Some(filename) =>
@@ -328,7 +681,38 @@ package object autotune {
 
     //    println("configFile: " + configFile)
 
+    implicit val system: ActorSystem = ActorSystem("HypermapperServer")
+    implicit val ec: ExecutionContext = system.dispatcher
+
+    // Assuming ConfigurationServiceHandler.partial(...) returns a function
+    val serviceFunction: HttpRequest => Future[HttpResponse] =
+      ConfigurationServiceHandler.partial(new ConfigurationServiceImpl)
+
+    // Convert the function to a PartialFunction
+    val service: PartialFunction[HttpRequest, Future[HttpResponse]] = {
+      case req: HttpRequest => serviceFunction(req)
+    }
+
+    // Now, use the converted service with concatOrNotFound
+    val handler: HttpRequest => Future[HttpResponse] = ServiceHandler.concatOrNotFound(service)
+
+    // Instantiate your service implementation
+    //val service: HttpRequest => Future[HttpResponse] =
+    //  ConfigurationServiceHandler.partial(new ConfigurationServiceImpl)
+
+    // Combine the service handlers as needed
+    //val handler: HttpRequest => Future[HttpResponse] = ServiceHandler.concatOrNotFound(service)
+
+    // Bind the service to a port
+    val bindingFuture = Http().newServerAt("localhost", 50051).bind(handler)
+    println("Server started at localhost:50051")
+
+    // Block until the stop condition is met
+    Await.result(ServerControl.stopFuture, Duration.Inf)
+    
+    // Add shutdown hook, cleanup resources, etc.
     // check if config file exists
+    /*
     assert(os.isFile(configFile))
 
     val hypermapper = os.proc(tuner.tunerPython, tuner.tunerRoot + "/" + tuner.tunerPath, configFile).spawn()
@@ -459,9 +843,10 @@ package object autotune {
       }
     }
 
+    */
+    val samples = ListBuffer[Sample]()
     val tuningResult = TuningResult(samples.toSeq, tuner)
-    saveTuningResult(tuningResult)
-
+    //saveTuningResult(tuningResult)
     tuningResult
   }
 

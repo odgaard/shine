@@ -1,6 +1,25 @@
 ThisBuild / scalaVersion := "2.13.3"
 ThisBuild / organization := "org.rise-lang"
 
+//Compile / PB.targets := Seq(
+//  scalapb.gen() -> (Compile / sourceManaged).value / "scalapb"
+//)
+
+//libraryDependencies ++= Seq(
+//    "io.grpc" % "grpc-netty" % scalapb.compiler.Version.grpcJavaVersion,
+//    "com.thesamet.scalapb" %% "scalapb-runtime-grpc" % scalapb.compiler.Version.scalapbVersion
+//)
+
+resolvers += "Akka library repository".at("https://repo.akka.io/maven")
+//val AkkaVersion = "2.9.0"
+//val AkkaHttpVersion = "10.6.0"
+//libraryDependencies ++= Seq(
+//  "com.typesafe.akka" %% "akka-actor-typed" % AkkaVersion,
+//  "com.typesafe.akka" %% "akka-stream" % AkkaVersion,
+//  "com.typesafe.akka" %% "akka-http" % AkkaHttpVersion
+//)
+enablePlugins(AkkaGrpcPlugin)
+
 lazy val commonSettings = Seq(
   scalacOptions ++= Seq(
     "-Wunused:nowarn",
