@@ -83,6 +83,8 @@ package object autotune {
   case class Sample(parameters: Map[String, TuningParameterValues], // specific parameter configuration
                     runtime: Either[AutoTuningError, TimeSpan[Time.ms]], // runtime or error
                     timestamp: Long, // timestamp of sample
+                    cpuEnergy: Double = 0, // energy consumption
+                    gpuEnergy: Double = 0, // energy consumption
                     tuningTimes: TuningTimes // durations of sub-parts
                    )
 
@@ -150,6 +152,53 @@ package object autotune {
   }
 
   class ConfigurationServiceImpl(implicit ec: ExecutionContext) extends ConfigurationService {
+    def readRAPLEnergy(): Long = {
+      val raplPath = "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj" // Adjust based on your system
+      try {
+        val energy = Process(s"cat $raplPath").!!.trim.toLong
+        energy
+      } catch {
+        case e: Exception => 
+          println("Failed to read RAPL energy: " + e.getMessage)
+          0L
+      }
+    }
+
+    def startGPUPowerLogging(interval_in_ms: Integer): Process = {
+      // Construct the command to pass to the shell
+      val cmd = Seq("bash", "-c", s"nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits -lms $interval_in_ms > gpu_power.log")
+      
+      // Run the command using the shell
+      cmd.run()
+    }
+
+    def readGPUEnergy(duration: Duration): Double = {
+      Thread.sleep(1000) // Wait a bit for the logging to flush to disk
+      val powerReadings = scala.io.Source.fromFile("gpu_power.log").getLines().toList.map(_.toDouble)
+      val averagePower = if (powerReadings.isEmpty) 0.0 else powerReadings.sum / powerReadings.length
+      val energyUsed = averagePower * duration.toMillis / 1000.0 // Convert ms to seconds and calculate energy
+      new java.io.File("gpu_power.log").delete() // Clean up
+      energyUsed
+    }
+
+    def measureEnergyConsumption[T](function: => T): (T, Double, Double) = {
+      val interval_in_ms = 10
+      val gpuLogger = startGPUPowerLogging(interval_in_ms)
+      val cpuEnergyBefore = readRAPLEnergy()
+      val startTime = System.nanoTime()
+
+      val result = function // Execute the function
+
+      val duration = Duration.fromNanos(System.nanoTime() - startTime)
+      gpuLogger.destroy()
+      val cpuEnergyAfter = readRAPLEnergy()
+      val gpuEnergyUsed = readGPUEnergy(duration)
+      val cpuEnergyUsed = (cpuEnergyAfter - cpuEnergyBefore) / 1000000.0 // Convert microjoules to Joules
+
+      (result, cpuEnergyUsed, gpuEnergyUsed)
+    }
+
+
     // Implement the RunConfigurationsClientServer method
     private def computeSample(header: Array[String], parametersValues: Array[String]): Sample = {
 
@@ -268,7 +317,11 @@ package object autotune {
               case None =>
 
                 // execute
-                val result = execute(
+                // Example usage
+                val (result, cpuEnergyUsed, gpuEnergyUsed) = measureEnergyConsumption {
+                  // Your function to measure here
+                //val result = 
+                execute(
                   rise.core.substitute.natsInExpr(parametersValuesMap.toMap[Nat, Nat], e),
                   tuner.hostCode,
                   tuner.timeouts,
@@ -276,6 +329,10 @@ package object autotune {
                   tuner.speedupFactor,
                   tuner.runtimeStatistic
                 )
+                }
+                println(s"CPU energy used: $cpuEnergyUsed joules")
+                println(s"GPU energy used: $gpuEnergyUsed joules")
+
                 val totalTime = Some(TimeSpan.inMilliseconds(
                   (System.currentTimeMillis() - totalStart).toDouble)
                 )
@@ -283,8 +340,11 @@ package object autotune {
                   parameters = parametersValuesMap.map(elem => (elem._1.toString, ClassicParameter(toInt(elem._2)))),
                   runtime = result.runtime,
                   timestamp = System.currentTimeMillis() - start,
+                  cpuEnergy = cpuEnergyUsed,
+                  gpuEnergy = gpuEnergyUsed,
                   tuningTimes = TuningTimes(
                     totalTime, result.codegenTime, result.compilationTime, result.executionTime)
+                    //totalTime, cpuEnergyUsed, gpuEnergyUsed, result.executionTime)
                 )
             }
           } else {
@@ -353,9 +413,11 @@ package object autotune {
 
       val metrics: Seq[Metric] = Seq(
         Metric(Seq(sample.runtime match {
-          case Right(timeSpan) => timeSpan.value.toDouble // Assuming TimeSpan has a `value` that can be converted to Double
-          case Left(_) => 0.0 // Or some other default/error value
+          case Right(timeSpan) => timeSpan.value.toDouble
+          case Left(_) => 0.0
         })),
+        Metric(Seq(sample.cpuEnergy)),
+        Metric(Seq(sample.gpuEnergy)),
         Metric(Seq(sample.tuningTimes.codegen.getOrElse(util.TimeSpan(0, util.Time.Millisecond)).value.toDouble)),
         Metric(Seq(sample.tuningTimes.compilation.getOrElse(util.TimeSpan(0, util.Time.Millisecond)).value.toDouble)),
         Metric(Seq(sample.tuningTimes.execution.getOrElse(util.TimeSpan(0, util.Time.Millisecond)).value.toDouble))
