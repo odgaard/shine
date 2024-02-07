@@ -172,16 +172,16 @@ package object autotune {
       cmd.run()
     }
 
-    def readGPUEnergy(duration: Duration): Double = {
+    def readGPUEnergy(durationInMillis: Double): Double = {
       Thread.sleep(1000) // Wait a bit for the logging to flush to disk
       val powerReadings = scala.io.Source.fromFile("gpu_power.log").getLines().toList.map(_.toDouble)
       val averagePower = if (powerReadings.isEmpty) 0.0 else powerReadings.sum / powerReadings.length
-      val energyUsed = averagePower * duration.toMillis / 1000.0 // Convert ms to seconds and calculate energy
+      val energyUsed = averagePower * durationInMillis / 1000.0 // Convert ms to seconds and calculate energy
       new java.io.File("gpu_power.log").delete() // Clean up
       energyUsed
     }
 
-    def measureEnergyConsumption[T](function: => T): (T, Double, Double) = {
+    def measureEnergyConsumption[T](function: => T): (T, Option[TimeSpan[Time.ms]], Double, Double) = {
       val interval_in_ms = 10
       val gpuLogger = startGPUPowerLogging(interval_in_ms)
       val cpuEnergyBefore = readRAPLEnergy()
@@ -189,13 +189,15 @@ package object autotune {
 
       val result = function // Execute the function
 
-      val duration = Duration.fromNanos(System.nanoTime() - startTime)
+      val durationInMillis: Double = (System.nanoTime() - startTime).toDouble / 1e6 // Convert nanoseconds to milliseconds
       gpuLogger.destroy()
       val cpuEnergyAfter = readRAPLEnergy()
-      val gpuEnergyUsed = readGPUEnergy(duration)
-      val cpuEnergyUsed = (cpuEnergyAfter - cpuEnergyBefore) / 1000000.0 // Convert microjoules to Joules
 
-      (result, cpuEnergyUsed, gpuEnergyUsed)
+      val gpuEnergyUsed = readGPUEnergy(durationInMillis) // Convert nanoseconds to milliseconds
+      val cpuEnergyUsed = (cpuEnergyAfter - cpuEnergyBefore) / 1e6 // Convert microjoules to Joules
+      val totalTime = Some(TimeSpan.inMilliseconds(durationInMillis))
+
+      (result, totalTime, cpuEnergyUsed, gpuEnergyUsed)
     }
 
 
@@ -318,7 +320,7 @@ package object autotune {
 
                 // execute
                 // Example usage
-                val (result, cpuEnergyUsed, gpuEnergyUsed) = measureEnergyConsumption {
+                val (result, totalTime, cpuEnergyUsed, gpuEnergyUsed) = measureEnergyConsumption {
                   // Your function to measure here
                 //val result = 
                 execute(
@@ -333,9 +335,9 @@ package object autotune {
                 println(s"CPU energy used: $cpuEnergyUsed joules")
                 println(s"GPU energy used: $gpuEnergyUsed joules")
 
-                val totalTime = Some(TimeSpan.inMilliseconds(
-                  (System.currentTimeMillis() - totalStart).toDouble)
-                )
+                //val totalTime = Some(TimeSpan.inMilliseconds(
+                //  (System.currentTimeMillis() - totalStart).toDouble)
+                //)
                 Sample(
                   parameters = parametersValuesMap.map(elem => (elem._1.toString, ClassicParameter(toInt(elem._2)))),
                   runtime = result.runtime,
