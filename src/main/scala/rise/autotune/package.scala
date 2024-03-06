@@ -514,7 +514,7 @@ package object autotune {
     val handler: HttpRequest => Future[HttpResponse] = ServiceHandler.concatOrNotFound(service)
 
     // Bind the service to a port
-    val bindingFuture = Http().newServerAt("localhost", 50051).bind(handler)
+    val bindingFuture = Http().newServerAt("0.0.0.0", 50051).bind(handler)
     println("Server started at localhost:50051")
 
     // Method to stop the server
