@@ -14,6 +14,7 @@ import shine.OpenCL.{GlobalSize, LocalSize}
 import util.{Time, TimeSpan, writeToPath}
 
 import java.io.{File, FileOutputStream, PrintWriter}
+import scala.util.{Try}
 import scala.collection.mutable.ListBuffer
 import scala.language.postfixOps
 import scala.sys.process._
@@ -174,7 +175,11 @@ package object autotune {
 
     def readGPUEnergy(durationInMillis: Double): Double = {
       Thread.sleep(1000) // Wait a bit for the logging to flush to disk
-      val powerReadings = scala.io.Source.fromFile("gpu_power.log").getLines().toList.map(_.toDouble)
+        // Read lines from the file, try to convert each line to Double, and filter out failures
+      val powerReadings = scala.io.Source.fromFile("gpu_power.log").getLines()
+                         .flatMap(line => Try(line.toDouble).toOption)
+                         .toList
+
       val averagePower = if (powerReadings.isEmpty) 0.0 else powerReadings.sum / powerReadings.length
       val energyUsed = averagePower * durationInMillis / 1000.0 // Convert ms to seconds and calculate energy
       new java.io.File("gpu_power.log").delete() // Clean up
