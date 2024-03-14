@@ -274,6 +274,9 @@ package object autotune {
         case None =>
           // parse here
 
+          println("header: " + header.mkString(","))
+          println("parametersValues: " + parametersValues.mkString(","))
+
           val parametersValuesMap: Map[NatIdentifier, Nat] = header.zip(parametersValues).map { case (h, p) =>
             NatIdentifier(h) -> (p.toFloat.toInt: Nat)
           }.toMap
@@ -323,7 +326,7 @@ package object autotune {
                 val (result, totalTime, cpuEnergyUsed, gpuEnergyUsed) = measureEnergyConsumption {
                   // Your function to measure here
                 //val result = 
-                execute(
+                  execute(
                   rise.core.substitute.natsInExpr(parametersValuesMap.toMap[Nat, Nat], e),
                   tuner.hostCode,
                   tuner.timeouts,
@@ -332,12 +335,19 @@ package object autotune {
                   tuner.runtimeStatistic
                 )
                 }
-                println(s"CPU energy used: $cpuEnergyUsed joules")
-                println(s"GPU energy used: $gpuEnergyUsed joules")
+                //println(s"CPU energy used: $cpuEnergyUsed joules")
+                //println(s"GPU energy used: $gpuEnergyUsed joules")
 
                 //val totalTime = Some(TimeSpan.inMilliseconds(
                 //  (System.currentTimeMillis() - totalStart).toDouble)
                 //)
+
+                //val cpuEnergyUsed = 0.0
+                //val gpuEnergyUsed = 0.0
+                //val totalTime = Some(TimeSpan.inMilliseconds(
+                //  (System.currentTimeMillis() - totalStart).toDouble)
+                //)
+
                 Sample(
                   parameters = parametersValuesMap.map(elem => (elem._1.toString, ClassicParameter(toInt(elem._2)))),
                   runtime = result.runtime,
@@ -391,8 +401,13 @@ package object autotune {
               values += paramType.stringParam.get.value
             case paramType if paramType.permutationParam.isDefined =>
               headers += key
-              //values += paramType.permutationParam.get.value.toString
-              values += paramType.permutationParam.get.values.mkString(", ")
+              // Adds a paranthesis before and after the values
+              values += "(" + paramType.permutationParam.get.values.mkString(",") + ")"
+              //values += paramType.permutationParam.get.values.mkString(",")
+              println("permutation: " + paramType.permutationParam.get.values)
+              println("permutation: " + values)
+              //println("permutation transform: " + paramType.permutationParam.get.values.mkString(","))
+              //values += paramType.permutationParam.get.values.mkString(",")
           }
         }
       }
@@ -400,10 +415,6 @@ package object autotune {
       // Convert the ArrayBuffer to Array if necessary
       val headerArray: Array[String] = headers.toArray
       val valuesArray: Array[String] = values.toArray
-
-      val sample: Sample = this.computeSample(headerArray, valuesArray)
-      println(sample)
-
 
       // Creating comma-separated strings
       val headerString = headerArray.mkString(",")
@@ -413,16 +424,19 @@ package object autotune {
       println(s"Header: $headerString")
       println(s"Values: $valuesString")
 
+      val sample: Sample = this.computeSample(headerArray, valuesArray)
+      println(sample)
+
       val metrics: Seq[Metric] = Seq(
         Metric(Seq(sample.runtime match {
           case Right(timeSpan) => timeSpan.value.toDouble
           case Left(_) => 0.0
-        })),
-        Metric(Seq(sample.cpuEnergy)),
-        Metric(Seq(sample.gpuEnergy)),
-        Metric(Seq(sample.tuningTimes.codegen.getOrElse(util.TimeSpan(0, util.Time.Millisecond)).value.toDouble)),
-        Metric(Seq(sample.tuningTimes.compilation.getOrElse(util.TimeSpan(0, util.Time.Millisecond)).value.toDouble)),
-        Metric(Seq(sample.tuningTimes.execution.getOrElse(util.TimeSpan(0, util.Time.Millisecond)).value.toDouble))
+        }), "compute_time"),
+        Metric(Seq(sample.cpuEnergy), "cpuEnergy"),
+        Metric(Seq(sample.gpuEnergy), "energy"),
+        Metric(Seq(sample.tuningTimes.codegen.getOrElse(util.TimeSpan(0, util.Time.Millisecond)).value.toDouble), "codegen"),
+        Metric(Seq(sample.tuningTimes.compilation.getOrElse(util.TimeSpan(0, util.Time.Millisecond)).value.toDouble), "codegen"),
+        Metric(Seq(sample.tuningTimes.execution.getOrElse(util.TimeSpan(0, util.Time.Millisecond)).value.toDouble), "execution")
       )
       println(metrics)
       val timestamps: Option[Timestamp] = Some(Timestamp(System.currentTimeMillis()))
