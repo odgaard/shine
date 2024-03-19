@@ -37,7 +37,7 @@ package object autotune {
                    samples: Int = 100, // number of parameter configurations (samples) to evaluate
                    name: String = "RISE", // todo this has to match name in config file!
                    output: String = "autotuning", // folder to store output files in
-                   timeouts: Timeouts = Timeouts(5000, 5000, 5000), // timeouts for codegen, compilation and execution
+                   timeouts: Timeouts = Timeouts(15000, 15000, 15000), // timeouts for codegen, compilation and execution
                    executionIterations: Int = 10, // defines, how many times the program is executed to determine the runtime a sample
                    runtimeStatistic: RuntimeStatistic = Median, // specifies, how to determine the runtime from multiple iterations (Median/Minimum)
                    speedupFactor: Double = 100, // defines at which threshold the iterations are dropped, if the execution is slow compared to current best
@@ -326,11 +326,7 @@ package object autotune {
 
               case None =>
 
-                // execute
-                // Example usage
                 val (result, totalTime, cpuEnergyUsed, gpuEnergyUsed) = measureEnergyConsumption {
-                  // Your function to measure here
-                //val result = 
                   execute(
                   rise.core.substitute.natsInExpr(parametersValuesMap.toMap[Nat, Nat], e),
                   tuner.hostCode,
@@ -340,18 +336,6 @@ package object autotune {
                   tuner.runtimeStatistic
                 )
                 }
-                //println(s"CPU energy used: $cpuEnergyUsed joules")
-                //println(s"GPU energy used: $gpuEnergyUsed joules")
-
-                //val totalTime = Some(TimeSpan.inMilliseconds(
-                //  (System.currentTimeMillis() - totalStart).toDouble)
-                //)
-
-                //val cpuEnergyUsed = 0.0
-                //val gpuEnergyUsed = 0.0
-                //val totalTime = Some(TimeSpan.inMilliseconds(
-                //  (System.currentTimeMillis() - totalStart).toDouble)
-                //)
 
                 Sample(
                   parameters = parametersValuesMap.map(elem => (elem._1.toString, ClassicParameter(toInt(elem._2)))),
@@ -408,11 +392,6 @@ package object autotune {
               headers += key
               // Adds a paranthesis before and after the values
               values += "(" + paramType.permutationParam.get.values.mkString(",") + ")"
-              //values += paramType.permutationParam.get.values.mkString(",")
-              println("permutation: " + paramType.permutationParam.get.values)
-              println("permutation: " + values)
-              //println("permutation transform: " + paramType.permutationParam.get.values.mkString(","))
-              //values += paramType.permutationParam.get.values.mkString(",")
           }
         }
       }
