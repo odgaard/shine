@@ -179,15 +179,34 @@ package object autotune {
       energyUsed
     }
 
+    def startGPUPowerLogging(interval_in_ms: Integer): Process = {
+      // Construct the command to pass to the shell
+      val cmd = Seq("bash", "-c", s"nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits -lms $interval_in_ms > gpu_power.log")
+      
+      // Run the command using the shell
+      cmd.run()
+    }
+
+
     def measureEnergyConsumption[T](function: => T): (T, Option[TimeSpan[Time.ms]], Double, Double) = {
-      //val gpuLogger = startGPUPowerLogging(interval_in_ms)
+      // Start GPU power logging
+      val interval_in_ms = 10
+      val gpuLogger = startGPUPowerLogging(interval_in_ms)
       val cpuEnergyBefore = readRAPLEnergy()
       val startTime = System.nanoTime()
 
-      val result = function // Execute the function
+      //Wraps the function in a try catch statement
+      var result: T = null.asInstanceOf[T]
+      try {
+        result = function
+      } catch {
+        case e: Exception =>
+          println("Error during execution: " + e.getMessage)
+      } finally {
+        gpuLogger.destroy()
+      }
 
       val durationInMillis: Double = (System.nanoTime() - startTime).toDouble / 1e6 // Convert nanoseconds to milliseconds
-      //gpuLogger.destroy()
       val cpuEnergyAfter = readRAPLEnergy()
 
       val gpuEnergyUsed = readGPUEnergy(durationInMillis) // Convert nanoseconds to milliseconds
@@ -486,8 +505,6 @@ package object autotune {
       )
     }
 
-    //    println("configFile: " + configFile)
-
     implicit val system: ActorSystem = ActorSystem("HypermapperServer")
     implicit val ec: ExecutionContext = system.dispatcher
 
@@ -502,18 +519,6 @@ package object autotune {
 
     // Now, use the converted service with concatOrNotFound
     val handler: HttpRequest => Future[HttpResponse] = ServiceHandler.concatOrNotFound(service)
-
-    def startGPUPowerLogging(interval_in_ms: Integer): Process = {
-      // Construct the command to pass to the shell
-      val cmd = Seq("bash", "-c", s"nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits -lms $interval_in_ms > gpu_power.log")
-      
-      // Run the command using the shell
-      cmd.run()
-    }
-
-    // Start GPU power logging
-    val interval_in_ms = 10
-    val gpuLogger = startGPUPowerLogging(interval_in_ms)
 
     // Bind the service to a port
     val bindingFuture = Http().newServerAt("0.0.0.0", 50051).bind(handler)
@@ -533,9 +538,6 @@ package object autotune {
     ServerControl.stopFuture.onComplete { _ =>
       stopServer(bindingFuture)
     }
-
-    // Stop GPU power logging 
-    gpuLogger.destroy()
 
     // Block until the stop condition is met
     Await.result(ServerControl.stopFuture, Duration.Inf)
