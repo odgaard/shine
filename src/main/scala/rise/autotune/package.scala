@@ -179,19 +179,15 @@ package object autotune {
       energyUsed
     }
 
-    def startGPUPowerLogging(interval_in_ms: Integer): Process = {
-      // Construct the command to pass to the shell
-      val cmd = Seq("bash", "-c", s"nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits -lms $interval_in_ms > gpu_power.log")
-      
-      // Run the command using the shell
-      cmd.run()
-    }
-
-
     def measureEnergyConsumption[T](function: => T): (T, Option[TimeSpan[Time.ms]], Double, Double) = {
       // Start GPU power logging
       val interval_in_ms = 10
-      val gpuLogger = startGPUPowerLogging(interval_in_ms)
+
+      // Construct the command to pass to the shell
+      //val cmd = Seq("bash", "-c", s"nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits -lms $interval_in_ms > gpu_power.log")
+      
+      // Run the command using the shell
+      //val gpuLogger = cmd.run()
       val cpuEnergyBefore = readRAPLEnergy()
       val startTime = System.nanoTime()
 
@@ -203,13 +199,14 @@ package object autotune {
         case e: Exception =>
           println("Error during execution: " + e.getMessage)
       } finally {
-        gpuLogger.destroy()
+        //gpuLogger.destroy()
       }
 
       val durationInMillis: Double = (System.nanoTime() - startTime).toDouble / 1e6 // Convert nanoseconds to milliseconds
       val cpuEnergyAfter = readRAPLEnergy()
 
-      val gpuEnergyUsed = readGPUEnergy(durationInMillis) // Convert nanoseconds to milliseconds
+      //val gpuEnergyUsed = readGPUEnergy(durationInMillis) // Convert nanoseconds to milliseconds
+      val gpuEnergyUsed = 0.0
       val cpuEnergyUsed = (cpuEnergyAfter - cpuEnergyBefore) / 1e6 // Convert microjoules to Joules
       val totalTime = Some(TimeSpan.inMilliseconds(durationInMillis))
 
