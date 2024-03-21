@@ -55,7 +55,7 @@ import scala.sys.process._
 
 class asumTuning extends test_util.Tests {
 
-  val inputSize: Int = 2 << 23
+  val inputSize: Int = 2 << 26
 
   def inputT(n: Nat) = ArrayType(n, f32)
 
