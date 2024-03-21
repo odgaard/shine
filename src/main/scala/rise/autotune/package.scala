@@ -199,7 +199,7 @@ package object autotune {
         case e: Exception =>
           println("Error during execution: " + e.getMessage)
       } finally {
-        //gpuLogger.destroy()
+        gpuLogger.destroy()
       }
 
       val durationInMillis: Double = (System.nanoTime() - startTime).toDouble / 1e6 // Convert nanoseconds to milliseconds
