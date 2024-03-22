@@ -28,6 +28,8 @@ import scala.concurrent.{ExecutionContext, Future, Promise, Await}
 import scala.concurrent.duration.Duration
 import scala.util.{Success, Failure}
 
+import scala.concurrent.duration._
+
 import rise.config_service._ // Import gRPC and protobuf classes generated from your .proto file
 
 package object autotune {
@@ -167,8 +169,8 @@ package object autotune {
 
 
     def readGPUEnergy(durationInMillis: Double): Double = {
-      Thread.sleep(1000) // Wait a bit for the logging to flush to disk
-        // Read lines from the file, try to convert each line to Double, and filter out failures
+      Thread.sleep(100) // Wait a bit for the logging to flush to disk
+      // Read lines from the file, try to convert each line to Double, and filter out failures
       val powerReadings = scala.io.Source.fromFile("gpu_power.log").getLines()
                          .flatMap(line => Try(line.toDouble).toOption)
                          .toList
@@ -180,33 +182,51 @@ package object autotune {
     }
 
     def measureEnergyConsumption[T](function: => T): (T, Option[TimeSpan[Time.ms]], Double, Double) = {
+
+
+      //Wraps the function in a try catch statement
+      var result: T = null.asInstanceOf[T]
+
       // Start GPU power logging
       val interval_in_ms = 100
-
+    
       // Construct the command to pass to the shell
       val cmd = Seq("bash", "-c", s"nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits -lms $interval_in_ms > gpu_power.log")
       
       // Run the command using the shell
       val gpuLogger = cmd.run()
+
       val cpuEnergyBefore = readRAPLEnergy()
       val startTime = System.nanoTime()
-
-      //Wraps the function in a try catch statement
-      var result: T = null.asInstanceOf[T]
       try {
         result = function
       } catch {
         case e: Exception =>
           println("Error during execution: " + e.getMessage)
       } finally {
+        // Stop GPU power logging
         gpuLogger.destroy()
+        // Wait for the process to terminate (custom waiting mechanism)
+        val maxWaitTime = Duration(10, SECONDS)
+        val waitInterval = Duration(100, MILLISECONDS)
+        var elapsedTime = Duration.Zero
+        
+        while (gpuLogger.isAlive() && elapsedTime < maxWaitTime) {
+          Thread.sleep(waitInterval.toMillis)
+          elapsedTime += waitInterval
+        }
+  
+        if (gpuLogger.isAlive()) {
+          println("GPU power logging process did not terminate within the specified timeout.")
+        } else {
+          println("GPU power logging process terminated.")
+        }
       }
 
       val durationInMillis: Double = (System.nanoTime() - startTime).toDouble / 1e6 // Convert nanoseconds to milliseconds
       val cpuEnergyAfter = readRAPLEnergy()
 
       val gpuEnergyUsed = readGPUEnergy(durationInMillis) // Convert nanoseconds to milliseconds
-      //val gpuEnergyUsed = 0.0
       val cpuEnergyUsed = (cpuEnergyAfter - cpuEnergyBefore) / 1e6 // Convert microjoules to Joules
       val totalTime = Some(TimeSpan.inMilliseconds(durationInMillis))
 
@@ -454,6 +474,7 @@ package object autotune {
 
     ServerControl.stopPromise = Promise[Unit]()
     ServerControl.stopFuture = ServerControl.stopPromise.future
+    
 
     val parameters = collectParameters(e)
 
