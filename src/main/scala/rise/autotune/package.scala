@@ -28,6 +28,8 @@ import scala.concurrent.{ExecutionContext, Future, Promise, Await}
 import scala.concurrent.duration.Duration
 import scala.util.{Success, Failure}
 
+import com.typesafe.config.ConfigFactory
+
 import scala.concurrent.duration._
 
 import rise.config_service._ // Import gRPC and protobuf classes generated from your .proto file
@@ -186,6 +188,11 @@ package object autotune {
 
       //Wraps the function in a try catch statement
       var result: T = null.asInstanceOf[T]
+
+
+      // Terminate any running nvidia-smi processes
+      val killCommand = Seq("pkill", "-f", "nvidia-smi")
+      killCommand.!
 
       // Start GPU power logging
       val interval_in_ms = 100
@@ -523,7 +530,8 @@ package object autotune {
       )
     }
 
-    implicit val system: ActorSystem = ActorSystem("HypermapperServer")
+    //implicit val system: ActorSystem = ActorSystem("HypermapperServer")
+    implicit val system: ActorSystem = ActorSystem("HypermapperServer", ConfigFactory.load())
     implicit val ec: ExecutionContext = system.dispatcher
 
     // Assuming ConfigurationServiceHandler.partial(...) returns a function
