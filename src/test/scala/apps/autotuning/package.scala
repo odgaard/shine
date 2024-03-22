@@ -203,7 +203,7 @@ package object autotuning {
     val result = autotune.execution.execute(
       expression = eReplaced,
       hostCode = hostCode,
-      timeouts = Timeouts(10000, 10000, 10000),
+      timeouts = Timeouts(60000, 60000, 60000),
       executionIterations = 51,
       speedupFactor = 100,
       execution = Median
@@ -256,7 +256,7 @@ package object autotuning {
       samples = 20, // defined by config file, value is ignored
       name = version,
       output = s"${output}/${version}",
-      timeouts = Timeouts(10000, 10000, 10000),
+      timeouts = Timeouts(60000, 60000, 60000),
       executionIterations = 51,
       speedupFactor = 100,
       configFile = Some(configFile),

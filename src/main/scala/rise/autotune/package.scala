@@ -41,7 +41,7 @@ package object autotune {
                    samples: Int = 100, // number of parameter configurations (samples) to evaluate
                    name: String = "RISE", // todo this has to match name in config file!
                    output: String = "autotuning", // folder to store output files in
-                   timeouts: Timeouts = Timeouts(15000, 15000, 15000), // timeouts for codegen, compilation and execution
+                   timeouts: Timeouts = Timeouts(60000, 60000, 60000), // timeouts for codegen, compilation and execution
                    executionIterations: Int = 10, // defines, how many times the program is executed to determine the runtime a sample
                    runtimeStatistic: RuntimeStatistic = Median, // specifies, how to determine the runtime from multiple iterations (Median/Minimum)
                    speedupFactor: Double = 100, // defines at which threshold the iterations are dropped, if the execution is slow compared to current best

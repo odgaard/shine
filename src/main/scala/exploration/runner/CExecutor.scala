@@ -589,7 +589,6 @@ int main(int argc, char** argv) {
     var runtime = 0.0
     //check global execution time. Discard any with factor 10
     var i = 0
-
     while (i < N) {
       //      runtimes(i) = (s"$bin" !!).toDouble
 
