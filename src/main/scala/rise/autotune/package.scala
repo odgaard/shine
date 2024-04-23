@@ -171,7 +171,7 @@ package object autotune {
 
 
     def readGPUEnergy(durationInMillis: Double): Double = {
-      Thread.sleep(100) // Wait a bit for the logging to flush to disk
+      Thread.sleep(10) // Wait a bit for the logging to flush to disk
       // Read lines from the file, try to convert each line to Double, and filter out failures
       val powerReadings = scala.io.Source.fromFile("gpu_power.log").getLines()
                          .flatMap(line => Try(line.toDouble).toOption)
@@ -195,7 +195,7 @@ package object autotune {
       killCommand.!
 
       // Start GPU power logging
-      val interval_in_ms = 100
+      val interval_in_ms = 10
     
       // Construct the command to pass to the shell
       val cmd = Seq("bash", "-c", s"nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits -lms $interval_in_ms > gpu_power.log")
@@ -214,14 +214,14 @@ package object autotune {
         // Stop GPU power logging
         gpuLogger.destroy()
         // Wait for the process to terminate (custom waiting mechanism)
-        val maxWaitTime = Duration(10, SECONDS)
-        val waitInterval = Duration(100, MILLISECONDS)
-        var elapsedTime = Duration.Zero
-        
-        while (gpuLogger.isAlive() && elapsedTime < maxWaitTime) {
-          Thread.sleep(waitInterval.toMillis)
-          elapsedTime += waitInterval
-        }
+//        val maxWaitTime = Duration(10, SECONDS)
+//        val waitInterval = Duration(100, MILLISECONDS)
+//        var elapsedTime = Duration.Zero
+//        
+//        while (gpuLogger.isAlive() && elapsedTime < maxWaitTime) {
+//          Thread.sleep(waitInterval.toMillis)
+//          elapsedTime += waitInterval
+//        }
   
         if (gpuLogger.isAlive()) {
           println("GPU power logging process did not terminate within the specified timeout.")

@@ -7,7 +7,8 @@ else
   echo $2 > .iterations
 fi
 
-SBT_OPTS="-Xms2G -Xmx8G" sbt "testOnly apps.autotuning.$1"
+#SBT_OPTS="-Xms2G -Xmx8G" sbt "testOnly apps.autotuning.$1"
+sbt "testOnly apps.autotuning.$1"
 #sbt "testOnly apps.autotuning.asumTuning"
 #sbt "testOnly apps.autotuning.harrisTuning"
 #sbt "testOnly apps.autotuning.kmeansTuning"
