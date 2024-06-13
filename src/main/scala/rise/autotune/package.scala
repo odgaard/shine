@@ -242,13 +242,16 @@ package object autotune {
 
 
     // Implement the RunConfigurationsClientServer method
-    private def computeSample(header: Array[String], parametersValues: Array[String]): Sample = {
+    private def computeSample(header: Array[String], parametersValues: Array[String], iterations: Int, timeouts: Timeouts): Sample = {
 
       val tuner = TunerControl.tuner
       val start = TunerControl.start
       val e = TunerControl.e
       val constraints = TunerControl.constraints
       val totalStart = System.currentTimeMillis()
+
+      //tuner.executionIterations = iterations
+      //tuner.timeouts = timeouts
 
       tuner.strategyMode match {
         case Some(fun) =>
@@ -365,8 +368,10 @@ package object autotune {
                   execute(
                   rise.core.substitute.natsInExpr(parametersValuesMap.toMap[Nat, Nat], e),
                   tuner.hostCode,
-                  tuner.timeouts,
-                  tuner.executionIterations,
+                  //tuner.timeouts,
+                  timeouts,
+                  //tuner.executionIterations,
+                  iterations,
                   tuner.speedupFactor,
                   tuner.runtimeStatistic
                 )
@@ -442,8 +447,46 @@ package object autotune {
       // Now you have your header and values as comma-separated strings
       println(s"Header: $headerString")
       println(s"Values: $valuesString")
+      var fids: Option[Fidelities] = None
+      request.fidelities match {
+        case Some(fidsr) =>
+          println(s"Received fidelities: ${fidsr.parameters}")
+          fids = Some(fidsr)
+        case None =>
+          println("No fidelities received")
+      }
+      /*
+      val iterations = fids match {
+        case Some(f) =>
+          f.parameters.get("iterations") match {
+            case Some(param) => param.paramType.integerParam.get.value.toInt
+            case None => throw new RuntimeException("No iterations parameter found")
+          }
+        case None => throw new RuntimeException("No fidelities available")
+      }
 
-      val sample: Sample = this.computeSample(headerArray, valuesArray)
+      val timeouts_int = fids match {
+        case Some(f) =>
+          f.parameters.get("timeouts") match {
+            case Some(param) => param.paramType.integerParam.get.value.toInt
+            case None => throw new RuntimeException("No timeouts parameter found")
+          }
+        case None => throw new RuntimeException("No fidelities available")
+      }
+      */
+      val iterationsOpt = fids.flatMap(_.parameters.get("iterations")).flatMap(_.paramType.integerParam).map(_.value.toInt)
+      val timeoutsIntOpt = fids.flatMap(_.parameters.get("timeouts")).flatMap(_.paramType.realParam).map(_.value.toInt)
+
+      val (iterations, timeouts, sample) = (iterationsOpt, timeoutsIntOpt) match {
+        case (Some(iterations), Some(timeoutsInt)) =>
+          println(s"Set iterations: $iterations")
+          println(s"Set timeouts: $timeoutsInt")
+          val timeouts = Timeouts(timeoutsInt.toLong, timeoutsInt.toLong, timeoutsInt.toLong)
+          val sample: Sample = this.computeSample(headerArray, valuesArray, iterations, timeouts)
+          (iterations, timeouts, sample)
+        case _ =>
+          throw new RuntimeException("Required parameters are missing")
+      }
       println(sample)
 
       val metrics: Seq[Metric] = Seq(

@@ -1,7 +1,5 @@
 syntax = "proto3";
 
-import "google/protobuf/timestamp.proto";
-
 option java_multiple_files = true;
 option java_package = "rise.config_service";
 option java_outer_classname = "ConfigServiceProto";
@@ -22,9 +20,14 @@ message ShutdownResponse {
 message ConfigurationRequest {
   Configuration configurations = 1;
   string output_data_file = 2;
+  Fidelities fidelities = 3;
 }
 
 message Configuration {
+  map<string, Parameter> parameters = 1;
+}
+
+message Fidelities {
   map<string, Parameter> parameters = 1;
 }
 
